@@ -35,7 +35,6 @@ from datetime import datetime
 from pathlib import Path
 
 from utils import (
-    print_disclaimer,
     validate_ipv6,
     load_targets_from_file,
     check_safety,
@@ -235,19 +234,16 @@ def main():
     主函数 - 程序入口点
 
     执行流程：
-    1. 打印免责声明，提醒用户仅限授权环境使用
-    2. 解析命令行参数
-    3. 配置日志系统
-    4. 执行安全检查（count、interval 限制）
-    5. 收集并验证目标地址
-    6. 检查 root 权限（发送原始套接字需要）
-    7. 如果是 dry-run 模式，仅展示报文结构
-    8. 否则执行实际探测，收集结果
-    9. 将结果写入输出文件
+    1. 解析命令行参数
+    2. 配置日志系统
+    3. 执行安全检查（count、interval 限制）
+    4. 收集并验证目标地址
+    5. 检查 root 权限（发送原始套接字需要）
+    6. 如果是 dry-run 模式，仅展示报文结构
+    7. 否则执行实际探测，收集结果
+    8. 将结果写入输出文件
     """
-    print_disclaimer()  # 步骤1：打印免责声明
-
-    args = parse_args()  # 步骤2：解析命令行参数
+    args = parse_args()  # 步骤1：解析命令行参数
     setup_logging(verbose=args.verbose)  # 步骤3：配置日志系统，根据 verbose 参数决定日志详细程度
 
     # 步骤4：执行安全检查，确保 count 和 interval 参数符合安全限制

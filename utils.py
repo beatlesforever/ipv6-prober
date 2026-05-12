@@ -3,7 +3,6 @@ IPv6 探测工具 - 工具函数模块
 
 本模块提供 IPv6 探测工具所需的各种工具函数和常量，包括：
 - 安全限制常量（最大目标数、最小间隔等）
-- 免责声明
 - IPv6 地址验证
 - 目标文件加载
 - 安全检查
@@ -24,32 +23,8 @@ DEFAULT_INTERVAL = 1.0  # 默认的发送间隔时间（秒）
 DEFAULT_COUNT = 1  # 默认的每个目标发送次数
 DEFAULT_TIMEOUT = 2  # 默认的等待响应超时时间（秒）
 
-# ==================== 免责声明 ====================
-# 程序启动时打印的免责声明，提醒用户仅限授权环境使用
-DISCLAIMER = """
-============================================================
-  IPv6 Abnormal Header Active Prober
-  免责声明 / Disclaimer
-------------------------------------------------------------
-  本工具仅限在授权实验环境、校园网可控靶机或自建云服务器中使用。
-  严禁用于未授权扫描、攻击、绕过检测或任何违法用途。
-  使用者需自行承担因不当使用带来的一切法律责任。
-  By running this tool, you confirm that you have proper
-  authorization to probe the specified targets.
-============================================================
-"""
-
 # 创建当前模块的日志记录器，名称为 "ipv6_prober"
 logger = logging.getLogger("ipv6_prober")
-
-
-def print_disclaimer():
-    """
-    打印免责声明
-    
-    在程序启动时调用，向用户展示使用限制和法律声明。
-    """
-    print(DISCLAIMER)  # 将免责声明输出到控制台
 
 
 def validate_ipv6(addr: str) -> str:
