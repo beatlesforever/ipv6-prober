@@ -171,11 +171,9 @@ class Prober:
                 send_time = time.time()
                 logger.info("发送 %s 探测 -> %s (第 %d/%d 次)", probe_type, target, i+1, count)
 
-                kwargs = {"timeout": self.timeout, "verbose": 0}
-                if self.iface:
-                    kwargs["iface"] = self.iface
-
-                response = sr1(pkt, **kwargs)
+                # 注意：iface 参数对 L3 I/O (IPv6) 无效，Scapy 会自动选择正确的接口
+                # 参考：https://scapy.readthedocs.io/en/latest/usage.html#multicast
+                response = sr1(pkt, timeout=self.timeout, verbose=0)
                 recv_time = time.time()
 
                 if response is not None:

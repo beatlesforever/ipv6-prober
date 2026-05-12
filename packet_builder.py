@@ -2,7 +2,7 @@
 IPv6 探测报文构造模块
 
 本模块负责构造各种类型的 IPv6 探测报文，包括：
-- 普通 ICMPv6 Echo Request 探测
+- 普通 ICMPv6 Echo Request 探测（标准 ping，不带额外负载）
 - 伪造源地址探测
 - 多层扩展头链探测
 - 分片头探测
@@ -10,6 +10,10 @@ IPv6 探测报文构造模块
 - 异常扩展头顺序探测
 
 使用 Scapy 库来构造和操作 IPv6 报文。
+
+重要说明：
+- normal 类型构造标准 ICMPv6 Echo Request，不带 Raw 负载，确保目标能正常响应
+- 其他异常探测类型可携带 Raw 负载用于追踪，因为这些类型本身就是测试异常行为
 """
 
 import logging  # 导入 logging 库，用于记录日志信息
@@ -40,22 +44,57 @@ class PacketBuilder:
     每个方法返回一个 Scapy packet 对象，可以直接发送或进一步修改。
     
     所有方法支持 probe_id 和 seq 参数，用于标识和追踪探测报文。
+    
+    报文负载策略：
+    - normal 类型：不带 Raw 负载，构造标准 ICMPv6 Echo Request，确保目标能正常响应
+    - 异常探测类型：可携带 Raw 负载用于追踪，因为这些类型本身就是测试异常行为
     """
 
-    def _build_echo(self, probe_id: int = 0, seq: int = 0, probe_type: str = "normal") -> object:
-        """构造带 id/seq/payload 的 ICMPv6 Echo Request
+    def _build_echo_with_payload(self, probe_id: int = 0, seq: int = 0, probe_type: str = "normal") -> object:
+        """构造带 Raw 负载的 ICMPv6 Echo Request
+        
         payload 格式: ipv6-prober|探测类型|probe_id|seq
         这样可以更可靠地区分不同探测包的响应。
+        
+        注意：部分公共目标（如 Google DNS）可能不响应带 Raw 负载的 ICMPv6 请求，
+        因此仅用于异常探测类型。normal 类型应使用不带负载的标准 Echo Request。
+        
+        Args:
+            probe_id: 探测标识 ID
+            seq: 序列号
+            probe_type: 探测类型名称
+            
+        Returns:
+            ICMPv6EchoRequest / Raw 组合的 Scapy packet 对象
         """
+        # 网络报文里传输的是字节，不是 Python 字符串，所以要 encode
         payload = f"ipv6-prober|{probe_type}|{probe_id}|{seq}".encode()
         return ICMPv6EchoRequest(id=probe_id, seq=seq) / Raw(load=payload)
+
+    def _build_echo_standard(self, probe_id: int = 0, seq: int = 0) -> object:
+        """构造标准 ICMPv6 Echo Request（不带 Raw 负载）
+        
+        这是标准的 ping 请求格式，不带额外负载。
+        大多数目标都能正常响应此格式的报文。
+        
+        Args:
+            probe_id: 探测标识 ID
+            seq: 序列号
+            
+        Returns:
+            ICMPv6EchoRequest Scapy packet 对象
+        """
+        return ICMPv6EchoRequest(id=probe_id, seq=seq)
 
     def build_normal_probe(self, dst: str, probe_id: int = 0, seq: int = 0) -> object:
         """
         构造普通 IPv6 ICMPv6 Echo Request 探测报文
         
-        这是最基础的探测类型，类似于 IPv4 下的 ping 命令。
+        这是最基础的探测类型，类似于 IPv6 下的 ping6 命令。
         用于测试目标主机是否可达以及网络连通性。
+        
+        构造标准 ICMPv6 Echo Request，不带 Raw 负载，
+        确保公共目标（如 Google DNS）能正常响应。
         
         Args:
             dst: 目标 IPv6 地址字符串
@@ -65,7 +104,8 @@ class PacketBuilder:
         Returns:
             Scapy packet 对象，包含 IPv6 头和 ICMPv6 Echo Request
         """
-        pkt = IPv6(dst=dst) / self._build_echo(probe_id, seq, "normal")
+        # 使用标准 Echo Request，不带 Raw 负载
+        pkt = IPv6(dst=dst) / self._build_echo_standard(probe_id, seq)
         logger.debug("构建 normal 探测报文 -> %s (probe_id=%d, seq=%d)", dst, probe_id, seq)
         return pkt
 
@@ -86,7 +126,8 @@ class PacketBuilder:
         Returns:
             Scapy packet 对象，源地址被设置为伪造地址
         """
-        pkt = IPv6(src=spoofed_src, dst=dst) / self._build_echo(probe_id, seq, "spoofed-src")
+        # 伪造源地址本身就是异常行为，使用标准 Echo Request 即可
+        pkt = IPv6(src=spoofed_src, dst=dst) / self._build_echo_standard(probe_id, seq)
         logger.debug("构建 spoofed-src 探测报文 -> %s (src=%s, probe_id=%d)", dst, spoofed_src, probe_id)
         return pkt
 
@@ -95,13 +136,13 @@ class PacketBuilder:
         """
         构造多层扩展头链的 IPv6 探测报文
         
-        通过 chain_len 参数控制 DestOpt 扩展头的数量，用于测试目标或中间设备
-        对不同长度扩展头链的处理能力。
-        
-        chain_len=1: IPv6 / DestOpt / ICMPv6
-        chain_len=2: IPv6 / HopByHop / DestOpt / ICMPv6（默认）
+        通过 chain_len 参数控制扩展头总数量。
+        第一个扩展头固定为 HopByHop，其余扩展头使用 DestOpt。
+
+        chain_len=1: IPv6 / HopByHop / ICMPv6
+        chain_len=2: IPv6 / HopByHop / DestOpt / ICMPv6
         chain_len=5: IPv6 / HopByHop / DestOpt / DestOpt / DestOpt / DestOpt / ICMPv6
-        
+
         实验中可以画出：扩展头数量 vs 响应率，分析目标对扩展头链长度的敏感度。
         
         Args:
@@ -118,8 +159,8 @@ class PacketBuilder:
         # 剩余的 chain_len - 1 个扩展头使用 DestOpt
         for _ in range(max(0, chain_len - 1)):
             pkt = pkt / IPv6ExtHdrDestOpt()
-        # 最后添加 ICMPv6 Echo Request 负载
-        pkt = pkt / self._build_echo(probe_id, seq, "ext-chain")
+        # 最后添加标准 ICMPv6 Echo Request（不带 Raw 负载）
+        pkt = pkt / self._build_echo_standard(probe_id, seq)
         logger.debug("构建 ext-chain 探测报文 -> %s (chain_len=%d)", dst, chain_len)
         return pkt
 
@@ -139,7 +180,8 @@ class PacketBuilder:
         Returns:
             Scapy packet 对象，包含分片扩展头
         """
-        pkt = IPv6(dst=dst) / IPv6ExtHdrFragment(offset=0, m=0) / self._build_echo(probe_id, seq, "fragment")
+        # 分片头本身就是异常探测，使用标准 Echo Request
+        pkt = IPv6(dst=dst) / IPv6ExtHdrFragment(offset=0, m=0) / self._build_echo_standard(probe_id, seq)
         logger.debug("构建 fragment 探测报文 -> %s", dst)
         return pkt
 
@@ -162,11 +204,12 @@ class PacketBuilder:
         Returns:
             Scapy packet 对象，包含路由扩展头
         """
+        # 路由头本身就是异常探测，使用标准 Echo Request
         pkt = IPv6(dst=dst) / IPv6ExtHdrRouting(
             type=0,
             segleft=0,
             addresses=[]
-        ) / self._build_echo(probe_id, seq, "routing")
+        ) / self._build_echo_standard(probe_id, seq)
         logger.debug("构建 routing 探测报文 -> %s", dst)
         return pkt
 
@@ -189,11 +232,12 @@ class PacketBuilder:
         Returns:
             Scapy packet 对象，扩展头顺序异常
         """
+        # 异常顺序本身就是异常探测，使用标准 Echo Request
         pkt = (
             IPv6(dst=dst)
             / IPv6ExtHdrDestOpt()
             / IPv6ExtHdrHopByHop()
-            / self._build_echo(probe_id, seq, "abnormal-order")
+            / self._build_echo_standard(probe_id, seq)
         )
         logger.debug("构建 abnormal-order 探测报文 -> %s", dst)
         return pkt
