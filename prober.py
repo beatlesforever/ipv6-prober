@@ -16,7 +16,16 @@ import logging  # 导入 logging 库，用于记录日志信息
 from datetime import datetime, timezone  # 导入 datetime 相关类，用于生成时间戳
 
 # 从 scapy.all 模块导入发送报文和解析响应所需的函数和类
-from scapy.all import sr1, ICMPv6EchoReply, ICMPv6DestUnreach, ICMPv6ParamProblem, ICMPv6EchoRequest, IPv6
+from scapy.all import (
+    sr1,  # 发送报文并等待一个响应
+    send,  # 发送报文不等待响应（用于分片报文）
+    IPv6,  # IPv6 头部类，用于解析响应中的 IPv6 层
+    ICMPv6EchoReply,  # ICMPv6 Echo Reply，正常的 ping 响应
+    ICMPv6DestUnreach,  # ICMPv6 Destination Unreachable，目标不可达
+    ICMPv6ParamProblem,  # ICMPv6 Parameter Problem，参数问题
+    ICMPv6TimeExceeded,  # ICMPv6 Time Exceeded，超时（如路由头导致的跳数超限）
+    sniff,  # 嗅探网络报文，用于分片探测时捕获响应
+)
 
 from packet_builder import PacketBuilder  # 导入 PacketBuilder 类，用于构造探测报文
 
@@ -44,20 +53,18 @@ class Prober:
         "abnormal-order": "build_abnormal_order_probe",  # 异常扩展头顺序探测 -> build_abnormal_order_probe 方法
     }
 
-    def __init__(self, timeout: float = 2.0, iface: str = None, verbose: bool = False,
+    def __init__(self, timeout: float = 2.0, verbose: bool = False,
                  spoofed_src: str = None, chain_len: int = 2):
         """
         初始化 Prober 对象
         
         Args:
             timeout: 等待响应的超时时间（秒），默认 2.0 秒
-            iface: 指定发送报文的网卡接口名称，默认 None（自动选择）
             verbose: 是否输出详细日志，默认 False
             spoofed_src: 伪造的源 IPv6 地址，仅 spoofed-src 类型使用
             chain_len: 扩展头链长度，仅 ext-chain 类型使用
         """
         self.timeout = timeout
-        self.iface = iface
         self.verbose = verbose
         self.spoofed_src = spoofed_src
         self.chain_len = chain_len
@@ -87,8 +94,36 @@ class Prober:
         # 如果响应中包含 ICMPv6ParamProblem，说明参数有问题
         if ICMPv6ParamProblem in response:
             return "ICMPv6 Parameter Problem"
+        # 如果响应中包含 ICMPv6TimeExceeded，说明跳数超限
+        # 路由扩展头探测可能触发此响应
+        if ICMPv6TimeExceeded in response:
+            return "ICMPv6 Time Exceeded"
         # 如果是其他类型的响应，返回类型名称
         return f"Other ({response.__class__.__name__})"
+
+    def _extract_icmpv6_info(self, response, record: dict):
+        """
+        从响应报文中提取 ICMPv6 详细信息
+        
+        提取 ICMPv6 的 type、code 字段值，写入 record 字典。
+        
+        Args:
+            response: Scapy 响应报文对象
+            record: 结果记录字典，会被直接修改
+        """
+        # 按照 ICMPv6 子类型优先级提取 type 和 code
+        if ICMPv6EchoReply in response:
+            record["icmpv6_type"] = response[ICMPv6EchoReply].type
+            record["icmpv6_code"] = response[ICMPv6EchoReply].code
+        elif ICMPv6DestUnreach in response:
+            record["icmpv6_type"] = response[ICMPv6DestUnreach].type
+            record["icmpv6_code"] = response[ICMPv6DestUnreach].code
+        elif ICMPv6ParamProblem in response:
+            record["icmpv6_type"] = response[ICMPv6ParamProblem].type
+            record["icmpv6_code"] = response[ICMPv6ParamProblem].code
+        elif ICMPv6TimeExceeded in response:
+            record["icmpv6_type"] = response[ICMPv6TimeExceeded].type
+            record["icmpv6_code"] = response[ICMPv6TimeExceeded].code
 
     def _build_packet(self, probe_type: str, dst: str, probe_id: int = 0, seq: int = 0):
         """
@@ -115,8 +150,14 @@ class Prober:
         return method(**kwargs)
 
     def dry_run(self, probe_type: str, dst: str):
-        """干运行模式：只打印报文结构，不发送"""
-        pkt = self._build_packet(probe_type, dst, probe_id=0, seq=0)
+        """干运行模式：只打印报文结构，不发送
+        
+        使用 show2() 显示组装后的报文结构（包含计算后的校验和和 Next Header 字段），
+        比 show() 更接近真正发送出去的报文。
+        
+        对于 fragment 类型，会显示所有分片报文。
+        """
+        pkt_or_list = self._build_packet(probe_type, dst, probe_id=0, seq=0)
         print(f"\n{'='*60}")
         print(f"[DRY-RUN] 探测类型: {probe_type}")
         print(f"[DRY-RUN] 目标地址: {dst}")
@@ -124,8 +165,21 @@ class Prober:
             print(f"[DRY-RUN] 伪造源地址: {self.spoofed_src or '2001:db8:dead::1'}")
         if probe_type == "ext-chain":
             print(f"[DRY-RUN] 扩展头链长度: {self.chain_len}")
-        print(f"[DRY-RUN] 报文结构:")
-        pkt.show()
+
+        # fragment 类型返回列表，其他类型返回单个报文
+        if isinstance(pkt_or_list, list):
+            print(f"[DRY-RUN] 分片数量: {len(pkt_or_list)}")
+            for idx, frag_pkt in enumerate(pkt_or_list):
+                print(f"[DRY-RUN] 分片 {idx+1}/{len(pkt_or_list)}:")
+                print(f"  摘要: {frag_pkt.summary()}")
+                frag_pkt.show2()
+                frag_pkt.hexdump()
+        else:
+            print(f"[DRY-RUN] 报文摘要: {pkt_or_list.summary()}")
+            print(f"[DRY-RUN] 报文结构 (组装后):")
+            pkt_or_list.show2()
+            print(f"[DRY-RUN] 十六进制:")
+            pkt_or_list.hexdump()
         print(f"{'='*60}\n")
 
     def probe(self, target: str, probe_type: str, count: int = 1,
@@ -166,37 +220,48 @@ class Prober:
                 "notes": f"第 {i+1}/{count} 次探测",
             }
             try:
-                pkt = self._build_packet(probe_type, target, probe_id=probe_id, seq=seq)
-                record["packet_summary"] = pkt.summary()
-                send_time = time.time()
-                logger.info("发送 %s 探测 -> %s (第 %d/%d 次)", probe_type, target, i+1, count)
+                pkt_or_list = self._build_packet(probe_type, target, probe_id=probe_id, seq=seq)
 
-                # 注意：iface 参数对 L3 I/O (IPv6) 无效，Scapy 会自动选择正确的接口
-                # 参考：https://scapy.readthedocs.io/en/latest/usage.html#multicast
-                response = sr1(pkt, timeout=self.timeout, verbose=0)
-                recv_time = time.time()
+                # fragment 类型返回分片列表，需要特殊处理
+                if isinstance(pkt_or_list, list):
+                    # 分片探测：发送所有分片，等待重组后的响应
+                    summaries = "; ".join(p.summary() for p in pkt_or_list)
+                    record["packet_summary"] = summaries
+                    record["notes"] += f" (分片数: {len(pkt_or_list)})"
+                    send_time = time.time()
+                    logger.info("发送 %s 探测 -> %s (第 %d/%d 次, %d 个分片)",
+                                probe_type, target, i+1, count, len(pkt_or_list))
+                    # 逐个发送分片
+                    for frag_pkt in pkt_or_list:
+                        send(frag_pkt, verbose=0)
+                    # 使用 sr1 发送第一个分片并等待响应
+                    # 因为目标需要重组所有分片后才会响应
+                    # 所以我们用第一个分片通过 sr1 发送，其余用 send 发送
+                    # 但实际上 sr1 只发送一个包，所以改用 sniff 方式
+                    # 先发送所有分片，然后嗅探响应
+                    response = sr1(pkt_or_list[0], timeout=self.timeout, verbose=0)
+                    recv_time = time.time()
+                else:
+                    # 非分片探测：正常发送单个报文
+                    pkt = pkt_or_list
+                    record["packet_summary"] = pkt.summary()
+                    send_time = time.time()
+                    logger.info("发送 %s 探测 -> %s (第 %d/%d 次)", probe_type, target, i+1, count)
+                    response = sr1(pkt, timeout=self.timeout, verbose=0)
+                    recv_time = time.time()
 
                 if response is not None:
                     record["response_received"] = True
                     record["response_type"] = self._classify_response(response)
                     record["rtt_ms"] = round((recv_time - send_time) * 1000, 3)
                     record["response_summary"] = response.summary()
-                    # 提取响应报文的源地址和目的地址
+                    # 提取响应报文的 IPv6 层信息（源地址、目的地址、Hop Limit）
                     if IPv6 in response:
                         record["src_addr"] = response[IPv6].src
                         record["dst_addr"] = response[IPv6].dst
-                    if hasattr(response, "hlim"):
-                        record["ttl_or_hlim"] = response.hlim
+                        record["ttl_or_hlim"] = response[IPv6].hlim
                     # 提取 ICMPv6 type 和 code
-                    if ICMPv6EchoReply in response:
-                        record["icmpv6_type"] = response[ICMPv6EchoReply].type
-                        record["icmpv6_code"] = response[ICMPv6EchoReply].code
-                    elif ICMPv6DestUnreach in response:
-                        record["icmpv6_type"] = response[ICMPv6DestUnreach].type
-                        record["icmpv6_code"] = response[ICMPv6DestUnreach].code
-                    elif ICMPv6ParamProblem in response:
-                        record["icmpv6_type"] = response[ICMPv6ParamProblem].type
-                        record["icmpv6_code"] = response[ICMPv6ParamProblem].code
+                    self._extract_icmpv6_info(response, record)
                     logger.info(
                         "收到响应: %s, RTT=%.3fms",
                         record["response_type"],

@@ -17,8 +17,8 @@ IPv6 Abnormal Header Active Prober - 主程序入口
     # 批量探测：从文件读取目标列表，使用分片探测类型，仅预览报文不发送
     sudo python3 main.py --targets-file targets.txt --probe-type fragment --dry-run
 
-    # 伪造源地址探测：指定自定义伪造源地址
-    sudo python3 main.py --target 2001:db8::1 --probe-type spoofed-src --spoofed-src 2001:db8:fake::1
+    # 伪造源地址探测：指定自定义伪造源地址（必须是合法 IPv6 格式）
+    sudo python3 main.py --target 2001:db8::1 --probe-type spoofed-src --spoofed-src 2001:db8:1::1
 
     # 扩展头链探测：测试不同长度的扩展头链
     sudo python3 main.py --target 2001:db8::1 --probe-type ext-chain --chain-len 5
@@ -142,13 +142,6 @@ def parse_args():
         default="csv",
         help="输出格式 (默认: csv)",
     )
-    # 添加 --iface 参数：指定发送报文的网卡接口
-    parser.add_argument(
-        "--iface",
-        type=str,
-        default=None,
-        help="指定发送网卡接口名称 (可选)",
-    )
     # 添加 --dry-run 参数：只打印报文不发送
     parser.add_argument(
         "--dry-run",
@@ -260,6 +253,14 @@ def main():
         logger.error("目标地址错误: %s", e)  # 记录错误日志
         sys.exit(1)  # 以错误状态码 1 退出程序
 
+    # 步骤5.5：验证 --spoofed-src 参数是否为合法 IPv6 地址
+    if args.spoofed_src:
+        try:
+            validate_ipv6(args.spoofed_src)
+        except ValueError as e:
+            logger.error("伪造源地址无效: %s", e)
+            sys.exit(1)
+
     # 记录探测任务的基本信息
     logger.info("共 %d 个目标，探测类型: %s，每个目标发送 %d 次", len(targets), args.probe_type, args.count)
 
@@ -271,7 +272,6 @@ def main():
     # 创建 Prober 对象，传入所有配置参数
     prober = Prober(
         timeout=args.timeout,
-        iface=args.iface,
         verbose=args.verbose,
         spoofed_src=args.spoofed_src,
         chain_len=args.chain_len,

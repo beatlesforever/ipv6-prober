@@ -145,8 +145,8 @@ def require_root():
     发送原始套接字报文通常需要 root 权限。
     如果没有 root 权限，会输出警告信息。
     """
-    # 检查是否为 Linux 系统，且 sys.flags 存在（确保是正常的 Python 环境）
-    if sys.platform.startswith("linux") and getattr(sys, "flags", None) is not None:
+    # 仅在 Linux 系统上检查 root 权限
+    if sys.platform.startswith("linux"):
         import os  # 导入 os 模块用于获取用户 ID
         # os.geteuid() 返回当前用户的有效用户 ID
         # root 用户的 UID 为 0
