@@ -93,7 +93,7 @@ def load_targets_from_file(filepath: str) -> list:
     return targets
 
 
-def check_safety(count: int, interval: float):
+def check_safety(count: int, interval: float, timeout: float = None):
     """
     执行安全检查
     
@@ -103,6 +103,7 @@ def check_safety(count: int, interval: float):
     Args:
         count: 每个目标的发送次数
         interval: 两次探测之间的间隔时间（秒）
+        timeout: 等待响应的超时时间（秒），可选
         
     Raises:
         ValueError: 参数不符合安全限制
@@ -115,6 +116,9 @@ def check_safety(count: int, interval: float):
         raise ValueError(
             f"interval 不能小于 {MIN_INTERVAL} 秒，当前值: {interval}"
         )
+    # 检查超时时间是否合法（必须大于 0）
+    if timeout is not None and timeout <= 0:
+        raise ValueError(f"timeout 必须大于 0，当前值: {timeout}")
 
 
 def setup_logging(verbose: bool = False):

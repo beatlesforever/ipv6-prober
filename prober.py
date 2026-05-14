@@ -23,9 +23,11 @@ from scapy.all import (
     ICMPv6EchoReply,  # ICMPv6 Echo Reply，正常的 ping 响应
     ICMPv6DestUnreach,  # ICMPv6 Destination Unreachable，目标不可达
     ICMPv6ParamProblem,  # ICMPv6 Parameter Problem，参数问题
-    ICMPv6TimeExceeded,  # ICMPv6 Time Exceeded，超时（如路由头导致的跳数超限）
-    sniff,  # 嗅探网络报文，用于分片探测时捕获响应
+    ICMPv6TimeExceeded,  # ICMPv6 Time Exceeded，超时
+    ICMPv6PacketTooBig,  # ICMPv6 Packet Too Big，包过大
+    AsyncSniffer,  # 异步嗅探器，用于分片探测时先启动再发送
 )
+from scapy.utils import hexdump  # hexdump 函数（Scapy 2.7 中 Packet.hexdump() 方法不可用）
 
 from packet_builder import PacketBuilder  # 导入 PacketBuilder 类，用于构造探测报文
 
@@ -95,9 +97,11 @@ class Prober:
         if ICMPv6ParamProblem in response:
             return "ICMPv6 Parameter Problem"
         # 如果响应中包含 ICMPv6TimeExceeded，说明跳数超限
-        # 路由扩展头探测可能触发此响应
         if ICMPv6TimeExceeded in response:
             return "ICMPv6 Time Exceeded"
+        # 如果响应中包含 ICMPv6PacketTooBig，说明报文过大
+        if ICMPv6PacketTooBig in response:
+            return "ICMPv6 Packet Too Big"
         # 如果是其他类型的响应，返回类型名称
         return f"Other ({response.__class__.__name__})"
 
@@ -124,6 +128,9 @@ class Prober:
         elif ICMPv6TimeExceeded in response:
             record["icmpv6_type"] = response[ICMPv6TimeExceeded].type
             record["icmpv6_code"] = response[ICMPv6TimeExceeded].code
+        elif ICMPv6PacketTooBig in response:
+            record["icmpv6_type"] = response[ICMPv6PacketTooBig].type
+            record["icmpv6_code"] = response[ICMPv6PacketTooBig].code
 
     def _build_packet(self, probe_type: str, dst: str, probe_id: int = 0, seq: int = 0):
         """
@@ -173,13 +180,13 @@ class Prober:
                 print(f"[DRY-RUN] 分片 {idx+1}/{len(pkt_or_list)}:")
                 print(f"  摘要: {frag_pkt.summary()}")
                 frag_pkt.show2()
-                frag_pkt.hexdump()
+                hexdump(frag_pkt)
         else:
             print(f"[DRY-RUN] 报文摘要: {pkt_or_list.summary()}")
             print(f"[DRY-RUN] 报文结构 (组装后):")
             pkt_or_list.show2()
             print(f"[DRY-RUN] 十六进制:")
-            pkt_or_list.hexdump()
+            hexdump(pkt_or_list)
         print(f"{'='*60}\n")
 
     def probe(self, target: str, probe_type: str, count: int = 1,
@@ -224,23 +231,37 @@ class Prober:
 
                 # fragment 类型返回分片列表，需要特殊处理
                 if isinstance(pkt_or_list, list):
-                    # 分片探测：发送所有分片，等待重组后的响应
+                    # 分片探测：先启动异步嗅探器，再发送所有分片，避免竞态条件
                     summaries = "; ".join(p.summary() for p in pkt_or_list)
                     record["packet_summary"] = summaries
                     record["notes"] += f" (分片数: {len(pkt_or_list)})"
-                    send_time = time.time()
                     logger.info("发送 %s 探测 -> %s (第 %d/%d 次, %d 个分片)",
                                 probe_type, target, i+1, count, len(pkt_or_list))
-                    # 逐个发送分片
+                    # 先启动异步嗅探器，确保不会错过快速响应
+                    sniffer = AsyncSniffer(
+                        timeout=self.timeout,
+                        count=1,
+                        lfilter=lambda p: (
+                            IPv6 in p
+                            and (
+                                ICMPv6EchoReply in p
+                                or ICMPv6DestUnreach in p
+                                or ICMPv6ParamProblem in p
+                                or ICMPv6TimeExceeded in p
+                                or ICMPv6PacketTooBig in p
+                            )
+                        ),
+                    )
+                    sniffer.start()
+                    time.sleep(0.01)  # 给嗅探器留出启动时间
+                    send_time = time.time()
+                    # 逐个发送所有分片
                     for frag_pkt in pkt_or_list:
                         send(frag_pkt, verbose=0)
-                    # 使用 sr1 发送第一个分片并等待响应
-                    # 因为目标需要重组所有分片后才会响应
-                    # 所以我们用第一个分片通过 sr1 发送，其余用 send 发送
-                    # 但实际上 sr1 只发送一个包，所以改用 sniff 方式
-                    # 先发送所有分片，然后嗅探响应
-                    response = sr1(pkt_or_list[0], timeout=self.timeout, verbose=0)
+                    # 等待嗅探器捕获响应或超时
+                    sniffer.join()
                     recv_time = time.time()
+                    response = sniffer.results[0] if sniffer.results else None
                 else:
                     # 非分片探测：正常发送单个报文
                     pkt = pkt_or_list

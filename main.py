@@ -241,7 +241,7 @@ def main():
 
     # 步骤4：执行安全检查，确保 count 和 interval 参数符合安全限制
     try:
-        check_safety(args.count, args.interval)  # 检查 count >= 1 且 interval >= 0.2
+        check_safety(args.count, args.interval, args.timeout)  # 检查 count >= 1、interval >= 0.2、timeout > 0
     except ValueError as e:  # 如果安全检查失败
         logger.error("安全检查未通过: %s", e)  # 记录错误日志
         sys.exit(1)  # 以错误状态码 1 退出程序
@@ -261,10 +261,17 @@ def main():
             logger.error("伪造源地址无效: %s", e)
             sys.exit(1)
 
+    # 步骤5.6：验证 --chain-len 参数范围
+    if args.probe_type == "ext-chain":
+        if args.chain_len < 1:
+            logger.error("--chain-len 必须 >= 1，当前值: %d", args.chain_len)
+            sys.exit(1)
+        if args.chain_len > 8:
+            logger.error("--chain-len 建议不超过 8，当前值: %d，避免生成过长异常链", args.chain_len)
+            sys.exit(1)
+
     # 记录探测任务的基本信息
     logger.info("共 %d 个目标，探测类型: %s，每个目标发送 %d 次", len(targets), args.probe_type, args.count)
-
-    require_root()  # 步骤6：检查是否有 root 权限（发送原始套接字需要）
 
     # 生成本次实验的唯一 probe_id
     probe_id = random.randint(1, 65535)
@@ -283,6 +290,8 @@ def main():
         for target in targets:  # 遍历所有目标地址
             prober.dry_run(args.probe_type, target)  # 调用 dry_run 方法展示报文结构
         return  # 直接返回，不执行实际探测
+
+    require_root()  # 步骤6：检查是否有 root 权限（发送原始套接字需要）
 
     # 步骤8：执行实际探测，收集结果
     all_results = []  # 初始化结果列表，用于存储所有探测结果

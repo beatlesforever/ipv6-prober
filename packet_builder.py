@@ -205,12 +205,13 @@ class PacketBuilder:
         # 构造一个较大的原始报文，确保需要分片
         # payload 包含可追踪信息 + 填充数据使报文足够大
         payload_data = f"ipv6-prober|fragment|{probe_id}|{seq}|".encode()
-        # 填充到足够大，确保 fragment6 会真正分片（MTU 通常为 1280）
-        payload_data += b"A" * 1200
+        # 填充到足够大，确保 fragment6 会真正分片
+        # 使用 2000 字节填充 + fragSize=512，保证稳定产生多个分片
+        payload_data += b"A" * 2000
         original_pkt = IPv6(dst=dst) / ICMPv6EchoRequest(id=probe_id, seq=seq) / Raw(load=payload_data)
         # 使用 Scapy 的 fragment6 函数进行真正的分片
-        # fragSize=1280 是 IPv6 最小 MTU，超过此大小的报文会被分片
-        fragments = fragment6(original_pkt, fragSize=1280)
+        # fragSize=512 确保稳定产生 3+ 个分片，可观察性比贴近 MTU 更重要
+        fragments = fragment6(original_pkt, fragSize=512)
         logger.debug("构建 fragment 探测报文 -> %s (分片数: %d)", dst, len(fragments))
         return fragments
 
@@ -224,10 +225,14 @@ class PacketBuilder:
         重要说明：
         - 之前版本使用 segleft=0，目标按 RFC 5095 规范会忽略路由头，
           导致探测效果等同于 normal
-        - 现在改为 segleft=1，目标必须处理路由头：
-          - 符合规范的实现应丢弃报文并返回 ICMPv6 Parameter Problem (Code 0)
-          - 不符合规范的实现可能忽略路由头并正常响应
+        - 现在改为 segleft=1，目标必须处理路由头
         - Type 0 路由头已被 RFC 5095 废弃，因为存在安全隐患
+        
+        实验结论应谨慎表述：
+        - 若无响应，可能是路径设备、目标主机或本地发送路径丢弃
+        - 若收到 Parameter Problem，说明目标或路径中某节点显式拒绝该报文
+        - 若收到 Echo Reply，说明目标忽略了路由头或未按规范处理
+        - 本地内核/网关可能不允许发出此类报文
         
         携带可追踪 payload，方便抓包时识别路由头探测报文。
         
@@ -240,12 +245,13 @@ class PacketBuilder:
             Scapy packet 对象，包含路由扩展头
         """
         # segleft=1：表示还有 1 个中间节点需要经过
-        # addresses 中包含一个文档保留地址作为路由中间节点
+        # addresses 中包含目标地址本身作为路由中间节点
         # 这会强制目标处理路由头，而不是忽略它
+        # 使用 dst 作为地址确保地址合法且与目标相关
         pkt = IPv6(dst=dst) / IPv6ExtHdrRouting(
             type=0,
             segleft=1,
-            addresses=["2001:db8:route::1"]
+            addresses=[dst]
         ) / self._build_echo_with_payload(probe_id, seq, "routing")
         logger.debug("构建 routing 探测报文 -> %s (segleft=1)", dst)
         return pkt
