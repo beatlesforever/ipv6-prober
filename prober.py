@@ -27,7 +27,6 @@ from scapy.all import (
     ICMPv6PacketTooBig,  # ICMPv6 Packet Too Big，包过大
     AsyncSniffer,  # 异步嗅探器，用于分片探测时先启动再发送
 )
-from scapy.utils import hexdump  # hexdump 函数（Scapy 2.7 中 Packet.hexdump() 方法不可用）
 
 from packet_builder import PacketBuilder  # 导入 PacketBuilder 类，用于构造探测报文
 
@@ -180,13 +179,10 @@ class Prober:
                 print(f"[DRY-RUN] 分片 {idx+1}/{len(pkt_or_list)}:")
                 print(f"  摘要: {frag_pkt.summary()}")
                 frag_pkt.show2()
-                hexdump(frag_pkt)
         else:
             print(f"[DRY-RUN] 报文摘要: {pkt_or_list.summary()}")
             print(f"[DRY-RUN] 报文结构 (组装后):")
             pkt_or_list.show2()
-            print(f"[DRY-RUN] 十六进制:")
-            hexdump(pkt_or_list)
         print(f"{'='*60}\n")
 
     def probe(self, target: str, probe_type: str, count: int = 1,
