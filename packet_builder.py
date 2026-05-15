@@ -93,24 +93,20 @@ class PacketBuilder:
 
     def build_normal_probe(self, dst: str, probe_id: int = 0, seq: int = 0) -> object:
         """
-        构造普通 IPv6 ICMPv6 Echo Request 探测报文
-        
-        这是最基础的探测类型，类似于 IPv6 下的 ping6 命令。
-        用于测试目标主机是否可达以及网络连通性。
-        
-        构造标准 ICMPv6 Echo Request，不带 Raw 负载，
-        确保公共目标（如 Google DNS）能正常响应。
-        
+        构造普通 IPv6 ICMPv6 Echo Request 探测报文（带可追踪 Raw 负载）
+
+        这是最基础的探测类型，作为所有异常探测类型的基线对照。
+        携带 Raw 负载确保与其他探测类型走相同的代码路径，排除代码差异的影响。
+
         Args:
             dst: 目标 IPv6 地址字符串
             probe_id: 探测标识 ID，用于区分不同探测实验
             seq: 序列号，用于区分同一实验中的不同探测包
-            
+
         Returns:
-            Scapy packet 对象，包含 IPv6 头和 ICMPv6 Echo Request
+            Scapy packet 对象，包含 IPv6 头和 ICMPv6 Echo Request / Raw
         """
-        # 使用标准 Echo Request，不带 Raw 负载
-        pkt = IPv6(dst=dst) / self._build_echo_standard(probe_id, seq)
+        pkt = IPv6(dst=dst) / self._build_echo_with_payload(probe_id, seq, "normal")
         logger.debug("构建 normal 探测报文 -> %s (probe_id=%d, seq=%d)", dst, probe_id, seq)
         return pkt
 
