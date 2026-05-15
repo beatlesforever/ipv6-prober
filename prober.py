@@ -17,15 +17,14 @@ from datetime import datetime, timezone  # 导入 datetime 相关类，用于生
 
 # 从 scapy.all 模块导入发送报文和解析响应所需的函数和类
 from scapy.all import (
-    sr1,  # 发送报文并等待一个响应
-    send,  # 发送报文不等待响应（用于分片报文）
+    send,  # 发送报文不等待响应
     IPv6,  # IPv6 头部类，用于解析响应中的 IPv6 层
     ICMPv6EchoReply,  # ICMPv6 Echo Reply，正常的 ping 响应
     ICMPv6DestUnreach,  # ICMPv6 Destination Unreachable，目标不可达
     ICMPv6ParamProblem,  # ICMPv6 Parameter Problem，参数问题
     ICMPv6TimeExceeded,  # ICMPv6 Time Exceeded，超时
     ICMPv6PacketTooBig,  # ICMPv6 Packet Too Big，包过大
-    AsyncSniffer,  # 异步嗅探器，用于分片探测时先启动再发送
+    AsyncSniffer,  # 异步嗅探器，先启动再发送，确保不遗漏响应
 )
 
 from packet_builder import PacketBuilder  # 导入 PacketBuilder 类，用于构造探测报文
@@ -225,47 +224,43 @@ class Prober:
             try:
                 pkt_or_list = self._build_packet(probe_type, target, probe_id=probe_id, seq=seq)
 
-                # fragment 类型返回分片列表，需要特殊处理
+                # 统一报文摘要
                 if isinstance(pkt_or_list, list):
-                    # 分片探测：先启动异步嗅探器，再发送所有分片，避免竞态条件
                     summaries = "; ".join(p.summary() for p in pkt_or_list)
                     record["packet_summary"] = summaries
                     record["notes"] += f" (分片数: {len(pkt_or_list)})"
                     logger.info("发送 %s 探测 -> %s (第 %d/%d 次, %d 个分片)",
                                 probe_type, target, i+1, count, len(pkt_or_list))
-                    # 先启动异步嗅探器，确保不会错过快速响应
-                    sniffer = AsyncSniffer(
-                        timeout=self.timeout,
-                        count=1,
-                        lfilter=lambda p: (
-                            IPv6 in p
-                            and (
-                                ICMPv6EchoReply in p
-                                or ICMPv6DestUnreach in p
-                                or ICMPv6ParamProblem in p
-                                or ICMPv6TimeExceeded in p
-                                or ICMPv6PacketTooBig in p
-                            )
-                        ),
-                    )
-                    sniffer.start()
-                    time.sleep(0.01)  # 给嗅探器留出启动时间
-                    send_time = time.time()
-                    # 逐个发送所有分片
+                else:
+                    record["packet_summary"] = pkt_or_list.summary()
+                    logger.info("发送 %s 探测 -> %s (第 %d/%d 次)", probe_type, target, i+1, count)
+
+                # 先启动异步嗅探器，再发送报文，避免竞态条件导致漏收响应
+                sniffer = AsyncSniffer(
+                    timeout=self.timeout,
+                    count=1,
+                    lfilter=lambda p: (
+                        IPv6 in p
+                        and (
+                            ICMPv6EchoReply in p
+                            or ICMPv6DestUnreach in p
+                            or ICMPv6ParamProblem in p
+                            or ICMPv6TimeExceeded in p
+                            or ICMPv6PacketTooBig in p
+                        )
+                    ),
+                )
+                sniffer.start()
+                time.sleep(0.01)  # 给嗅探器留出启动时间
+                send_time = time.time()
+                if isinstance(pkt_or_list, list):
                     for frag_pkt in pkt_or_list:
                         send(frag_pkt, verbose=0)
-                    # 等待嗅探器捕获响应或超时
-                    sniffer.join()
-                    recv_time = time.time()
-                    response = sniffer.results[0] if sniffer.results else None
                 else:
-                    # 非分片探测：正常发送单个报文
-                    pkt = pkt_or_list
-                    record["packet_summary"] = pkt.summary()
-                    send_time = time.time()
-                    logger.info("发送 %s 探测 -> %s (第 %d/%d 次)", probe_type, target, i+1, count)
-                    response = sr1(pkt, timeout=self.timeout, verbose=0)
-                    recv_time = time.time()
+                    send(pkt_or_list, verbose=0)
+                sniffer.join()
+                recv_time = time.time()
+                response = sniffer.results[0] if sniffer.results else None
 
                 if response is not None:
                     record["response_received"] = True
