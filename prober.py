@@ -18,14 +18,13 @@ from datetime import datetime, timezone  # 导入 datetime 相关类，用于生
 # 从 scapy.all 模块导入发送报文和解析响应所需的函数和类
 from scapy.all import (
     send,  # 发送报文不等待响应
-    sr1,  # 发送报文并等待第一个响应（支持 nofilter 参数）
     IPv6,  # IPv6 头部类，用于解析响应中的 IPv6 层
     ICMPv6EchoReply,  # ICMPv6 Echo Reply，正常的 ping 响应
     ICMPv6DestUnreach,  # ICMPv6 Destination Unreachable，目标不可达
     ICMPv6ParamProblem,  # ICMPv6 Parameter Problem，参数问题
     ICMPv6TimeExceeded,  # ICMPv6 Time Exceeded，超时
     ICMPv6PacketTooBig,  # ICMPv6 Packet Too Big，包过大
-    AsyncSniffer,  # 异步嗅探器，仅用于 fragment 多包发送场景
+    AsyncSniffer,  # 异步嗅探器，先启动再发送，确保不遗漏响应
 )
 
 from packet_builder import PacketBuilder  # 导入 PacketBuilder 类，用于构造探测报文
@@ -55,20 +54,32 @@ class Prober:
     }
 
     def __init__(self, timeout: float = 2.0, verbose: bool = False,
-                 spoofed_src: str = None, chain_len: int = 2):
+                 spoofed_src: str = None, spoof_type: str = None,
+                 chain_len: int = 2,
+                 fragment_mode: str = "complete",
+                 routing_mode: str = "type0-segleft1",
+                 order_type: str = "destopt-before-hbh"):
         """
         初始化 Prober 对象
-        
+
         Args:
             timeout: 等待响应的超时时间（秒），默认 2.0 秒
             verbose: 是否输出详细日志，默认 False
-            spoofed_src: 伪造的源 IPv6 地址，仅 spoofed-src 类型使用
+            spoofed_src: 伪造的源 IPv6 地址（直接指定）
+            spoof_type: 伪造源地址预设类别（document/link-local/multicast）
             chain_len: 扩展头链长度，仅 ext-chain 类型使用
+            fragment_mode: 分片模式（complete/incomplete/overlap/tiny）
+            routing_mode: 路由头模式（type0-segleft1/type0-segleft0）
+            order_type: 异常顺序类型（destopt-before-hbh/fragment-before-hbh/double-hbh/routing-after-fragment）
         """
         self.timeout = timeout
         self.verbose = verbose
         self.spoofed_src = spoofed_src
+        self.spoof_type = spoof_type
         self.chain_len = chain_len
+        self.fragment_mode = fragment_mode
+        self.routing_mode = routing_mode
+        self.order_type = order_type
         self.builder = PacketBuilder()
 
     def _classify_response(self, response) -> str:
@@ -134,15 +145,15 @@ class Prober:
     def _build_packet(self, probe_type: str, dst: str, probe_id: int = 0, seq: int = 0):
         """
         根据探测类型构造报文
-        
+
         Args:
             probe_type: 探测类型名称
             dst: 目标 IPv6 地址
             probe_id: 探测标识 ID
             seq: 序列号
-            
+
         Returns:
-            Scapy packet 对象
+            Scapy packet 对象或分片报文列表
         """
         method_name = self.PROBE_METHODS.get(probe_type)
         if method_name is None:
@@ -151,16 +162,21 @@ class Prober:
         kwargs = {"dst": dst, "probe_id": probe_id, "seq": seq}
         if probe_type == "spoofed-src":
             kwargs["spoofed_src"] = self.spoofed_src or "2001:db8:dead::1"
+            kwargs["spoof_type"] = self.spoof_type
         if probe_type == "ext-chain":
             kwargs["chain_len"] = self.chain_len
+        if probe_type == "fragment":
+            kwargs["fragment_mode"] = self.fragment_mode
+        if probe_type == "routing":
+            kwargs["routing_mode"] = self.routing_mode
+        if probe_type == "abnormal-order":
+            kwargs["order_type"] = self.order_type
         return method(**kwargs)
 
     def dry_run(self, probe_type: str, dst: str):
         """干运行模式：只打印报文结构，不发送
-        
-        使用 show2() 显示组装后的报文结构（包含计算后的校验和和 Next Header 字段），
-        比 show() 更接近真正发送出去的报文。
-        
+
+        使用 show2() 显示组装后的报文结构（包含计算后的校验和和 Next Header 字段）。
         对于 fragment 类型，会显示所有分片报文。
         """
         pkt_or_list = self._build_packet(probe_type, dst, probe_id=0, seq=0)
@@ -169,8 +185,16 @@ class Prober:
         print(f"[DRY-RUN] 目标地址: {dst}")
         if probe_type == "spoofed-src":
             print(f"[DRY-RUN] 伪造源地址: {self.spoofed_src or '2001:db8:dead::1'}")
+            if self.spoof_type:
+                print(f"[DRY-RUN] 伪造源地址类别: {self.spoof_type}")
         if probe_type == "ext-chain":
             print(f"[DRY-RUN] 扩展头链长度: {self.chain_len}")
+        if probe_type == "fragment":
+            print(f"[DRY-RUN] 分片模式: {self.fragment_mode}")
+        if probe_type == "routing":
+            print(f"[DRY-RUN] 路由头模式: {self.routing_mode}")
+        if probe_type == "abnormal-order":
+            print(f"[DRY-RUN] 异常顺序类型: {self.order_type}")
 
         # fragment 类型返回列表，其他类型返回单个报文
         if isinstance(pkt_or_list, list):
@@ -236,34 +260,34 @@ class Prober:
                     record["packet_summary"] = pkt_or_list.summary()
                     logger.info("发送 %s 探测 -> %s (第 %d/%d 次)", probe_type, target, i+1, count)
 
+                # 先启动异步嗅探器，再发送报文，避免竞态条件导致漏收响应
+                # filter="icmp6" 内核 BPF 预筛 + lfilter Python 精确匹配
+                sniffer = AsyncSniffer(
+                    timeout=self.timeout,
+                    count=1,
+                    filter="icmp6",
+                    lfilter=lambda p: (
+                        IPv6 in p
+                        and (
+                            ICMPv6EchoReply in p
+                            or ICMPv6DestUnreach in p
+                            or ICMPv6ParamProblem in p
+                            or ICMPv6TimeExceeded in p
+                            or ICMPv6PacketTooBig in p
+                        )
+                    ),
+                )
+                sniffer.start()
+                time.sleep(0.01)
                 send_time = time.time()
                 if isinstance(pkt_or_list, list):
-                    # 分片报文：先启嗅探器，再逐片发送（多包，无法用 sr1）
-                    sniffer = AsyncSniffer(
-                        timeout=self.timeout,
-                        count=1,
-                        lfilter=lambda p: (
-                            IPv6 in p
-                            and (
-                                ICMPv6EchoReply in p
-                                or ICMPv6DestUnreach in p
-                                or ICMPv6ParamProblem in p
-                                or ICMPv6TimeExceeded in p
-                                or ICMPv6PacketTooBig in p
-                            )
-                        ),
-                    )
-                    sniffer.start()
-                    time.sleep(0.01)
                     for frag_pkt in pkt_or_list:
                         send(frag_pkt, verbose=0)
-                    sniffer.join()
-                    response = sniffer.results[0] if sniffer.results else None
                 else:
-                    # 单包：sr1 + nofilter 跳过自动 BPF，避免 Raw 负载导致的匹配错误
-                    response = sr1(pkt_or_list, nofilter=True,
-                                   timeout=self.timeout, verbose=0)
+                    send(pkt_or_list, verbose=0)
+                sniffer.join()
                 recv_time = time.time()
+                response = sniffer.results[0] if sniffer.results else None
 
                 if response is not None:
                     record["response_received"] = True

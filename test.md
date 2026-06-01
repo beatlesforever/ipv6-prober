@@ -7,7 +7,7 @@ ssh ubuntu\@170.9.232.205
 | 主机           | 公网 IPv6 地址                             |
 | ------------ | -------------------------------------- |
 | 云服务器         | `2603:c028:4505:b142:0:7859:7328:a163` |
-| Windows 本地电脑 | `2402:f000:4:1008:809:9845:ddb9:8a16`  |
+| Windows 本地电脑 | `2402:f000:4:1008:809:ffff:fff1:8a16`  |
 
 ## 在服务器上运行
 
@@ -129,20 +129,22 @@ sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type normal --cou
 # 扩展头链探测（指定链长）
 sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type ext-chain --chain-len 5
 
-# 分片探测
-sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type fragment
+# 分片探测（4种模式）
+sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type fragment --fragment-mode complete
+sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type fragment --fragment-mode overlap
 
-# 路由扩展头探测
-sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type routing
+# 路由扩展头探测（3种模式）
+sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type routing --routing-mode type0-segleft1
 
-# 异常扩展头顺序探测
-sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type abnormal-order
+# 异常扩展头顺序探测（4种违规）
+sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type abnormal-order --order-type double-hbh
 
-# 伪造源地址探测
+# 伪造源地址探测（预设类别 + 自定义）
+sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type spoofed-src --spoof-type link-local
 sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type spoofed-src --spoofed-src 2001:db8:1::1
 
 # 预览报文结构（不发送）
-sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type normal --dry-run
+sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type fragment --fragment-mode overlap --dry-run
 
 # 查看结果文件
 cat results/probe_normal_*.json

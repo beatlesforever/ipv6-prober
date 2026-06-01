@@ -17,11 +17,20 @@ IPv6 Abnormal Header Active Prober - 主程序入口
     # 批量探测：从文件读取目标列表，使用分片探测类型，仅预览报文不发送
     sudo python3 main.py --targets-file targets.txt --probe-type fragment --dry-run
 
-    # 伪造源地址探测：指定自定义伪造源地址（必须是合法 IPv6 格式）
-    sudo python3 main.py --target 2001:db8::1 --probe-type spoofed-src --spoofed-src 2001:db8:1::1
+    # 伪造源地址探测：使用预设类别（document / link-local / multicast）
+    sudo python3 main.py --target 2001:db8::1 --probe-type spoofed-src --spoof-type link-local
 
     # 扩展头链探测：测试不同长度的扩展头链
     sudo python3 main.py --target 2001:db8::1 --probe-type ext-chain --chain-len 5
+
+    # 分片探测：重叠分片模式（经典 NIDS 逃避手法）
+    sudo python3 main.py --target 2001:db8::1 --probe-type fragment --fragment-mode overlap
+
+    # 路由头探测：对比 segleft=1 vs segleft=0 判断 RFC 5095 合规性
+    sudo python3 main.py --target 2001:db8::1 --probe-type routing --routing-mode type0-segleft1
+
+    # 异常顺序探测：Fragment 在 Routing 前（违反 RFC 8200 推荐顺序）
+    sudo python3 main.py --target 2001:db8::1 --probe-type abnormal-order --order-type routing-after-fragment
 
     # 追加模式：多次运行结果写入同一文件
     sudo python3 main.py --target 2001:db8::1 --probe-type normal --output results.csv --append
@@ -44,6 +53,7 @@ from utils import (
     DEFAULT_INTERVAL,
     DEFAULT_TIMEOUT,
 )
+from packet_builder import SPOOFED_SOURCE_PRESETS
 from prober import Prober
 from result_writer import ResultWriter
 
@@ -80,9 +90,12 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,  # 保留帮助信息中的换行格式
         epilog=(  # 在帮助信息末尾添加使用示例
             "示例:\n"
-            "  sudo python3 main.py --target 2001:db8::1 --probe-type normal --count 1\n"
-            "  sudo python3 main.py --targets-file targets.txt --probe-type fragment --dry-run\n"
-            "  sudo python3 main.py --target 2001:db8::1 --probe-type ext-chain --format json --output results.json\n"
+            "  sudo python3 main.py --target 2001:db8::1 --probe-type normal\n"
+            "  sudo python3 main.py --target 2001:db8::1 --probe-type fragment --fragment-mode overlap --dry-run\n"
+            "  sudo python3 main.py --target 2001:db8::1 --probe-type spoofed-src --spoof-type link-local\n"
+            "  sudo python3 main.py --target 2001:db8::1 --probe-type routing --routing-mode type0-segleft0\n"
+            "  sudo python3 main.py --target 2001:db8::1 --probe-type abnormal-order --order-type routing-after-fragment\n"
+            "  sudo python3 main.py --targets-file targets.txt --probe-type ext-chain --chain-len 5 -o results.csv\n"
         ),
     )
     # 添加 --target 参数：指定单个目标 IPv6 地址
@@ -169,6 +182,49 @@ def parse_args():
         type=int,
         default=2,
         help="扩展头链长度，仅 ext-chain 类型有效 (默认: 2)",
+    )
+    # 添加 --spoof-type 参数：选择伪造源地址预设类别
+    parser.add_argument(
+        "--spoof-type",
+        type=str,
+        default=None,
+        choices=list(SPOOFED_SOURCE_PRESETS.keys()),
+        help="伪造源地址预设类别，仅 spoofed-src 类型有效。"
+             f"可选: {', '.join(SPOOFED_SOURCE_PRESETS.keys())}. "
+             "document=文档前缀(不应出现在公网), link-local=链路本地(路由器应丢弃), "
+             "multicast=组播作源地址(协议非法)",
+    )
+    # 添加 --fragment-mode 参数：选择分片模式
+    parser.add_argument(
+        "--fragment-mode",
+        type=str,
+        default="complete",
+        choices=["complete", "incomplete", "overlap", "tiny"],
+        help="分片模式，仅 fragment 类型有效 (默认: complete)。"
+             "complete=完整分片, incomplete=丢弃最后分片, "
+             "overlap=重叠分片, tiny=微分片",
+    )
+    # 添加 --routing-mode 参数：选择路由头模式
+    parser.add_argument(
+        "--routing-mode",
+        type=str,
+        default="type0-segleft1",
+        choices=["type0-segleft1", "type0-segleft0"],
+        help="路由头模式，仅 routing 类型有效 (默认: type0-segleft1)。"
+             "type0-segleft1=强制目标处理(应拒绝), "
+             "type0-segleft0=segleft已完成(应忽略,等同于normal)",
+    )
+    # 添加 --order-type 参数：选择异常顺序类型
+    parser.add_argument(
+        "--order-type",
+        type=str,
+        default="destopt-before-hbh",
+        choices=["destopt-before-hbh", "fragment-before-hbh",
+                 "double-hbh", "routing-after-fragment"],
+        help="异常顺序类型，仅 abnormal-order 类型有效 (默认: destopt-before-hbh)。"
+             "destopt-before-hbh=DestOpt在HopByHop前, "
+             "fragment-before-hbh=Fragment在HopByHop前, "
+             "double-hbh=双重HopByHop, routing-after-fragment=Fragment在Routing前",
     )
     # 添加 --append 参数：追加写入结果文件
     parser.add_argument(
@@ -281,7 +337,11 @@ def main():
         timeout=args.timeout,
         verbose=args.verbose,
         spoofed_src=args.spoofed_src,
+        spoof_type=args.spoof_type,
         chain_len=args.chain_len,
+        fragment_mode=args.fragment_mode,
+        routing_mode=args.routing_mode,
+        order_type=args.order_type,
     )
 
     # 步骤7：如果是 dry-run 模式，仅展示报文结构，不发送
