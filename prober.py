@@ -161,7 +161,7 @@ class Prober:
         method = getattr(self.builder, method_name)
         kwargs = {"dst": dst, "probe_id": probe_id, "seq": seq}
         if probe_type == "spoofed-src":
-            kwargs["spoofed_src"] = self.spoofed_src or "2001:db8:dead::1"
+            kwargs["spoofed_src"] = self.spoofed_src
             kwargs["spoof_type"] = self.spoof_type
         if probe_type == "ext-chain":
             kwargs["chain_len"] = self.chain_len
