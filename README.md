@@ -61,7 +61,7 @@ sudo python3 main.py --target 2001:db8::1 --probe-type normal --count 1 --output
 # 直接指定伪造源地址
 sudo python3 main.py --target 2001:db8::1 --probe-type spoofed-src --spoofed-src 2001:db8:dead::1
 sudo python3 main.py --target 2001:db8::1 --probe-type spoofed-src --spoofed-src fe80::1
-sudo python3 main.py --target 2001:db8::1 --probe-type spoofed-src --spoofed-src ff02::1
+sudo python3 main.py --target 2001:db8::1 --probe-type spoofed-src --spoofed-src 2603:c028:4505:b142::1  # 同网段地址
 ```
 
 ### 扩展头链探测（可变链长）
