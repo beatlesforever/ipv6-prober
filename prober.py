@@ -184,7 +184,8 @@ class Prober:
         print(f"[DRY-RUN] 探测类型: {probe_type}")
         print(f"[DRY-RUN] 目标地址: {dst}")
         if probe_type == "spoofed-src":
-            print(f"[DRY-RUN] 伪造源地址: {self.spoofed_src or '2001:db8:dead::1'}")
+            resolved = self.builder._resolve_spoofed_src(self.spoofed_src, self.spoof_type)
+            print(f"[DRY-RUN] 伪造源地址: {resolved}")
             if self.spoof_type:
                 print(f"[DRY-RUN] 伪造源地址类别: {self.spoof_type}")
         if probe_type == "ext-chain":
