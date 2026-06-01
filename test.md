@@ -139,9 +139,9 @@ sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type routing --ro
 # 异常扩展头顺序探测（4种违规）
 sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type abnormal-order --order-type double-hbh
 
-# 伪造源地址探测（预设类别 + 自定义）
-sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type spoofed-src --spoof-type link-local
-sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type spoofed-src --spoofed-src 2001:db8:1::1
+# 伪造源地址探测
+sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type spoofed-src --spoofed-src 2001:db8:dead::1
+sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type spoofed-src --spoofed-src fe80::1
 
 # 预览报文结构（不发送）
 sudo ./.venv/bin/python3 main.py --target <IPv6地址> --probe-type fragment --fragment-mode overlap --dry-run

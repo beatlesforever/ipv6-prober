@@ -54,7 +54,7 @@ class Prober:
     }
 
     def __init__(self, timeout: float = 2.0, verbose: bool = False,
-                 spoofed_src: str = None, spoof_type: str = None,
+                 spoofed_src: str = None,
                  chain_len: int = 2,
                  fragment_mode: str = "complete",
                  routing_mode: str = "type0-segleft1",
@@ -65,8 +65,7 @@ class Prober:
         Args:
             timeout: 等待响应的超时时间（秒），默认 2.0 秒
             verbose: 是否输出详细日志，默认 False
-            spoofed_src: 伪造的源 IPv6 地址（直接指定）
-            spoof_type: 伪造源地址预设类别（document/link-local/multicast）
+            spoofed_src: 伪造的源 IPv6 地址，仅 spoofed-src 类型使用
             chain_len: 扩展头链长度，仅 ext-chain 类型使用
             fragment_mode: 分片模式（complete/incomplete/overlap/tiny）
             routing_mode: 路由头模式（type0-segleft1/type0-segleft0）
@@ -75,7 +74,6 @@ class Prober:
         self.timeout = timeout
         self.verbose = verbose
         self.spoofed_src = spoofed_src
-        self.spoof_type = spoof_type
         self.chain_len = chain_len
         self.fragment_mode = fragment_mode
         self.routing_mode = routing_mode
@@ -162,7 +160,6 @@ class Prober:
         kwargs = {"dst": dst, "probe_id": probe_id, "seq": seq}
         if probe_type == "spoofed-src":
             kwargs["spoofed_src"] = self.spoofed_src
-            kwargs["spoof_type"] = self.spoof_type
         if probe_type == "ext-chain":
             kwargs["chain_len"] = self.chain_len
         if probe_type == "fragment":
@@ -184,10 +181,7 @@ class Prober:
         print(f"[DRY-RUN] 探测类型: {probe_type}")
         print(f"[DRY-RUN] 目标地址: {dst}")
         if probe_type == "spoofed-src":
-            resolved = self.builder._resolve_spoofed_src(self.spoofed_src, self.spoof_type)
-            print(f"[DRY-RUN] 伪造源地址: {resolved}")
-            if self.spoof_type:
-                print(f"[DRY-RUN] 伪造源地址类别: {self.spoof_type}")
+            print(f"[DRY-RUN] 伪造源地址: {self.spoofed_src or '2001:db8:dead::1'}")
         if probe_type == "ext-chain":
             print(f"[DRY-RUN] 扩展头链长度: {self.chain_len}")
         if probe_type == "fragment":

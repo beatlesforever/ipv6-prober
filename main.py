@@ -17,8 +17,8 @@ IPv6 Abnormal Header Active Prober - 主程序入口
     # 批量探测：从文件读取目标列表，使用分片探测类型，仅预览报文不发送
     sudo python3 main.py --targets-file targets.txt --probe-type fragment --dry-run
 
-    # 伪造源地址探测：使用预设类别（document / link-local / multicast）
-    sudo python3 main.py --target 2001:db8::1 --probe-type spoofed-src --spoof-type link-local
+    # 伪造源地址探测：直接指定伪造源地址
+    sudo python3 main.py --target 2001:db8::1 --probe-type spoofed-src --spoofed-src fe80::1
 
     # 扩展头链探测：测试不同长度的扩展头链
     sudo python3 main.py --target 2001:db8::1 --probe-type ext-chain --chain-len 5
@@ -53,7 +53,6 @@ from utils import (
     DEFAULT_INTERVAL,
     DEFAULT_TIMEOUT,
 )
-from packet_builder import SPOOFED_SOURCE_PRESETS
 from prober import Prober
 from result_writer import ResultWriter
 
@@ -92,7 +91,7 @@ def parse_args():
             "示例:\n"
             "  sudo python3 main.py --target 2001:db8::1 --probe-type normal\n"
             "  sudo python3 main.py --target 2001:db8::1 --probe-type fragment --fragment-mode overlap --dry-run\n"
-            "  sudo python3 main.py --target 2001:db8::1 --probe-type spoofed-src --spoof-type link-local\n"
+            "  sudo python3 main.py --target 2001:db8::1 --probe-type spoofed-src --spoofed-src fe80::1\n"
             "  sudo python3 main.py --target 2001:db8::1 --probe-type routing --routing-mode type0-segleft0\n"
             "  sudo python3 main.py --target 2001:db8::1 --probe-type abnormal-order --order-type routing-after-fragment\n"
             "  sudo python3 main.py --targets-file targets.txt --probe-type ext-chain --chain-len 5 -o results.csv\n"
@@ -182,17 +181,6 @@ def parse_args():
         type=int,
         default=2,
         help="扩展头链长度，仅 ext-chain 类型有效 (默认: 2)",
-    )
-    # 添加 --spoof-type 参数：选择伪造源地址预设类别
-    parser.add_argument(
-        "--spoof-type",
-        type=str,
-        default=None,
-        choices=list(SPOOFED_SOURCE_PRESETS.keys()),
-        help="伪造源地址预设类别，仅 spoofed-src 类型有效。"
-             f"可选: {', '.join(SPOOFED_SOURCE_PRESETS.keys())}. "
-             "document=文档前缀(不应出现在公网), link-local=链路本地(路由器应丢弃), "
-             "multicast=组播作源地址(协议非法)",
     )
     # 添加 --fragment-mode 参数：选择分片模式
     parser.add_argument(
@@ -337,7 +325,6 @@ def main():
         timeout=args.timeout,
         verbose=args.verbose,
         spoofed_src=args.spoofed_src,
-        spoof_type=args.spoof_type,
         chain_len=args.chain_len,
         fragment_mode=args.fragment_mode,
         routing_mode=args.routing_mode,

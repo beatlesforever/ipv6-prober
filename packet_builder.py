@@ -3,7 +3,7 @@ IPv6 探测报文构造模块
 
 本模块负责构造各种类型的 IPv6 探测报文，包括：
 - 普通 ICMPv6 Echo Request 探测（标准 ping，基线对照）
-- 伪造源地址探测（支持多种地址类型预设）
+- 伪造源地址探测
 - 多层扩展头链探测（携带真实选项的 HopByHop / DestOpt）
 - 分片头探测（完整 / 不完整 / 重叠 / 微分片）
 - 路由扩展头探测（Type 0, segleft=0/1 / 多地址源路由）
@@ -35,17 +35,6 @@ from scapy.all import (
 
 logger = logging.getLogger("ipv6_prober.packet_builder")
 
-# ---- 伪造源地址预设分类 ----
-# 覆盖安全研究中常见的源地址伪造场景，不同类别触发不同的过滤规则
-
-SPOOFED_SOURCE_PRESETS = {
-    "document":  "2001:db8:dead::1",  # RFC 3849 文档前缀，不应出现在公网
-    "link-local":"fe80::1",           # 链路本地地址，任何路由器都应丢弃
-    "multicast": "ff02::1",           # 组播地址作为源地址，根本非法
-}
-SPOOFED_SOURCE_DEFAULT = "2001:db8:dead::1"
-
-
 class PacketBuilder:
     """
     构造各类 IPv6 探测报文的工具类
@@ -66,19 +55,6 @@ class PacketBuilder:
         """
         return ICMPv6EchoRequest(id=probe_id, seq=seq)
 
-    def _resolve_spoofed_src(self, spoofed_src: str = None,
-                              spoof_type: str = None) -> str:
-        """解析伪造源地址。优先级：spoofed_src 显式 > spoof_type 预设 > 默认值"""
-        if spoofed_src:
-            return spoofed_src
-        if spoof_type and spoof_type in SPOOFED_SOURCE_PRESETS:
-            return SPOOFED_SOURCE_PRESETS[spoof_type]
-        return SPOOFED_SOURCE_DEFAULT
-
-    # ============================================================
-    #  公共探测构造方法
-    # ============================================================
-
     # ---- normal ----
 
     def build_normal_probe(self, dst: str, probe_id: int = 0, seq: int = 0):
@@ -95,32 +71,23 @@ class PacketBuilder:
     # ---- spoofed-src ----
 
     def build_spoofed_src_probe(self, dst: str,
-                                 spoofed_src: str = None,
-                                 spoof_type: str = None,
+                                 spoofed_src: str = "2001:db8:dead::1",
                                  probe_id: int = 0, seq: int = 0):
         """
         构造伪造源地址的 IPv6 探测报文
 
-        支持两种指定方式：
-        - spoofed_src: 直接指定伪造地址
-        - spoof_type:  从预设类别中选择
-
-        预设类别覆盖安全研究中常见的源地址伪造场景：
-
-        | spoof_type  | 地址             | 安全意义                           |
-        |-------------|------------------|------------------------------------|
-        | document    | 2001:db8:dead::1 | RFC 3849 保留，不应出现在公网       |
-        | link-local  | fe80::1          | 链路本地地址，任何路由器都应丢弃    |
-        | multicast   | ff02::1          | 组播地址作为源地址，协议层面非法    |
+        通过 --spoofed-src 直接指定伪造的源 IPv6 地址。
+        常用测试地址示例:
+        - 2001:db8:dead::1  (RFC 3849 文档前缀, 不应出现在公网)
+        - fe80::1           (链路本地地址, 路由器应丢弃)
+        - ff02::1           (组播作源地址, 协议非法)
 
         Args:
             dst: 目标 IPv6 地址
-            spoofed_src: 直接指定伪造源地址（优先级高于 spoof_type）
-            spoof_type: 预设类别名称
+            spoofed_src: 伪造的源 IPv6 地址
         """
-        src = self._resolve_spoofed_src(spoofed_src, spoof_type)
-        pkt = IPv6(src=src, dst=dst) / self._build_echo_standard(probe_id, seq)
-        logger.debug("构建 spoofed-src -> %s (src=%s)", dst, src)
+        pkt = IPv6(src=spoofed_src, dst=dst) / self._build_echo_standard(probe_id, seq)
+        logger.debug("构建 spoofed-src -> %s (src=%s)", dst, spoofed_src)
         return pkt
 
     # ---- ext-chain ----
